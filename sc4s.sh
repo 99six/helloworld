@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Check if the script is being run with sudo
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run this script with sudo."
+    exit 1
+fi
+
 # Function to check if an environment variable exists, if not, prompt the user for the value and store it
 set_env_var() {
     local var_name=$1
@@ -14,25 +20,21 @@ set_env_var() {
             read -p "$var_prompt" var_value
         fi
         export "$var_name"="$var_value"
-        
+
         # Make the variable persist across reboots
         if ! grep -q "^${var_name}=" /etc/environment; then
-            echo "$var_name=\"$var_value\"" | sudo tee -a /etc/environment > /dev/null
+            echo "$var_name=\"$var_value\"" >> /tmp/env_vars_to_add
         fi
     else
         echo "$var_name is already set to ${!var_name}"
     fi
 }
 
-# Function to check and create volume directories if they do not exist
-check_and_create_directory() {
-    local dir_path=$1
-    if [ ! -d "$dir_path" ]; then
-        echo "Directory $dir_path does not exist. Creating it..."
-        sudo mkdir -p "$dir_path"
-        sudo chown sc4s:sc4s "$dir_path"
-    else
-        echo "Directory $dir_path already exists."
+# Function to apply environment variables to /etc/environment
+apply_env_vars() {
+    if [ -f /tmp/env_vars_to_add ]; then
+        tee -a /etc/environment < /tmp/env_vars_to_add > /dev/null
+        rm /tmp/env_vars_to_add
     fi
 }
 
@@ -45,12 +47,14 @@ set_env_var "SC4S_IMAGE" "Enter the SC4S container image (e.g., myprivateregistr
 set_env_var "REGISTRY_USERNAME" "Enter the registry username: " false
 set_env_var "REGISTRY_PASSWORD" "Enter the registry password: " true
 
+# Apply the environment variables to /etc/environment
+apply_env_vars
+
 # Ensure podman is installed, if not, install it
-if ! command -v podman &> /dev/null
-then
+if ! command -v podman &> /dev/null; then
     echo "Podman not found, installing..."
-    sudo apt-get update
-    sudo apt-get install -y podman conntrack
+    apt-get update
+    apt-get install -y podman conntrack
 else
     echo "Podman is already installed."
 fi
@@ -60,7 +64,7 @@ echo "Logging into registry..."
 podman login $SC4S_IMAGE --username $REGISTRY_USERNAME --password $REGISTRY_PASSWORD
 
 # Create sysctl configuration for SC4S
-cat <<EOF | sudo tee /etc/sysctl.d/sc4s.conf
+tee /etc/sysctl.d/sc4s.conf > /dev/null <<EOF
 net.core.rmem_default = 1703936
 net.core.rmem_max = 1703936
 net.ipv4.ip_forward = 1
@@ -68,17 +72,17 @@ net.ipv4.ip_unprivileged_port_start=514
 EOF
 
 # Apply the sysctl configuration
-sudo sysctl -p /etc/sysctl.d/sc4s.conf
+sysctl -p /etc/sysctl.d/sc4s.conf
 
 # Enable and start podman socket service
-sudo systemctl enable --now podman.socket
+systemctl enable --now podman.socket
 
 # Create the SC4S container user and directories
-sudo useradd -c "SC4S container user" -d /opt/sc4s -m sc4s
-sudo install -d -g sc4s -o sc4s -m 0755 /opt/sc4s/{local,archive,tls}
+useradd -c "SC4S container user" -d /opt/sc4s -m sc4s
+install -d -g sc4s -o sc4s -m 0755 /opt/sc4s/{local,archive,tls}
 
 # Create environment file for SC4S
-cat <<EOF | sudo tee /opt/sc4s/env_file
+tee /opt/sc4s/env_file > /dev/null <<EOF
 SPLUNK_HEC_URL=$SC4S_HEC_URL
 SPLUNK_HEC_TOKEN=$SC4S_HEC_TOKEN
 SC4S_DEST_SPLUNK_HEC_TLS_VERIFY=no
@@ -93,16 +97,13 @@ SC4S_LISTEN_DEFAULT_UDP_PORT=514
 EOF
 
 # Create the Podman volume for SC4S persistent storage
-sudo su -l sc4s -c "podman volume create splunk-sc4s-var"
+su -l sc4s -c "podman volume create splunk-sc4s-var"
 
 # Check and create necessary directories for volume mounts
-check_and_create_directory "/opt/sc4s/local"
-check_and_create_directory "/opt/sc4s/archive"
-check_and_create_directory "/opt/sc4s/tls"
-check_and_create_directory "/var/lib/syslog-ng"
+check_and_create_directories "/opt/sc4s/local" "/opt/sc4s/archive" "/opt/sc4s/tls" "/var/lib/syslog-ng"
 
 # Create a systemd service file for SC4S
-cat <<EOF | sudo tee /etc/systemd/system/sc4s.service
+tee /etc/systemd/system/sc4s.service > /dev/null <<EOF
 [Unit]
 Description=SC4S Container
 Wants=NetworkManager.service network-online.target
@@ -146,5 +147,5 @@ Restart=on-abnormal
 EOF
 
 # Reload the systemd daemon and enable the SC4S service
-sudo systemctl daemon-reload
-sudo systemctl enable --now sc4s.service
+systemctl daemon-reload
+systemctl enable --now sc4s.service

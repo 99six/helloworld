@@ -4,9 +4,15 @@
 set_env_var() {
     local var_name=$1
     local var_prompt=$2
+    local is_sensitive=$3  # Flag to determine if input should be masked
 
     if [ -z "${!var_name}" ]; then
-        read -p "$var_prompt" var_value
+        if [ "$is_sensitive" == "true" ]; then
+            read -s -p "$var_prompt" var_value
+            echo
+        else
+            read -p "$var_prompt" var_value
+        fi
         export "$var_name"="$var_value"
         
         # Make the variable persist across reboots
@@ -31,13 +37,13 @@ check_and_create_directory() {
 }
 
 # Check and set environment variables for SC4S
-set_env_var "SC4S_HEC_URL" "Enter the HEC URL (e.g., https://hec-url:8088): "
-set_env_var "SC4S_HEC_TOKEN" "Enter the HEC Token: "
-set_env_var "SC4S_IMAGE" "Enter the SC4S container image (e.g., myprivateregistry.com/splunk/sc4s:latest): "
+set_env_var "SC4S_HEC_URL" "Enter the HEC URL (e.g., https://hec-url:8088): " false
+set_env_var "SC4S_HEC_TOKEN" "Enter the HEC Token: " true
+set_env_var "SC4S_IMAGE" "Enter the SC4S container image (e.g., myprivateregistry.com/splunk/sc4s:latest): " false
 
 # Set and store registry credentials
-set_env_var "REGISTRY_USERNAME" "Enter the registry username: "
-set_env_var "REGISTRY_PASSWORD" "Enter the registry password: "
+set_env_var "REGISTRY_USERNAME" "Enter the registry username: " false
+set_env_var "REGISTRY_PASSWORD" "Enter the registry password: " true
 
 # Ensure podman is installed, if not, install it
 if ! command -v podman &> /dev/null
@@ -49,8 +55,9 @@ else
     echo "Podman is already installed."
 fi
 
-# Log into the private container registry (storing credentials for future use)
-echo $REGISTRY_PASSWORD | podman login $SC4S_IMAGE --username $REGISTRY_USERNAME --password-stdin
+# Log into the private container registry (using interactive password prompt for security)
+echo "Logging into registry..."
+podman login $SC4S_IMAGE --username $REGISTRY_USERNAME --password $REGISTRY_PASSWORD
 
 # Create sysctl configuration for SC4S
 cat <<EOF | sudo tee /etc/sysctl.d/sc4s.conf
@@ -118,7 +125,7 @@ Environment="SC4S_LOCAL_MOUNT=/opt/sc4s/local:/etc/syslog-ng/conf.d/local:Z"
 Environment="SC4S_ARCHIVE_MOUNT=/opt/sc4s/archive:/var/lib/syslog-ng/archive:Z"
 Environment="SC4S_TLS_MOUNT=/opt/sc4s/tls:/etc/syslog-ng/tls:z"
 
-ExecStartPre=/usr/bin/podman login $SC4S_IMAGE --username $REGISTRY_USERNAME --password $REGISTRY_PASSWORD
+ExecStartPre=/usr/bin/podman login $SC4S_IMAGE --username $REGISTRY_USERNAME
 ExecStartPre=/usr/bin/podman pull $SC4S_IMAGE
 ExecStartPre=/usr/bin/bash -c "/usr/bin/systemctl set-environment SC4SHOST=\$(hostname -s)"
 

@@ -38,6 +38,19 @@ apply_env_vars() {
     fi
 }
 
+# Ensure podman is installed, if not, install it
+if ! command -v podman &> /dev/null; then
+    echo "Podman not found, attempting installation..."
+    apt-get update
+    if ! apt-get install -y podman conntrack; then
+        echo "Podman installation failed. Exiting script."
+        exit 1
+    fi
+else
+    echo "Podman is already installed. Skipping setup."
+    exit 0
+fi
+
 # Check and set environment variables for SC4S
 set_env_var "SC4S_HEC_URL" "Enter the HEC URL (e.g., https://hec-url:8088): " false
 set_env_var "SC4S_HEC_TOKEN" "Enter the HEC Token: " true
@@ -49,15 +62,6 @@ set_env_var "REGISTRY_PASSWORD" "Enter the registry password: " true
 
 # Apply the environment variables to /etc/environment
 apply_env_vars
-
-# Ensure podman is installed, if not, install it
-if ! command -v podman &> /dev/null; then
-    echo "Podman not found, installing..."
-    apt-get update
-    apt-get install -y podman conntrack
-else
-    echo "Podman is already installed."
-fi
 
 # Log into the private container registry (using interactive password prompt for security)
 echo "Logging into registry..."
